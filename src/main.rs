@@ -100,21 +100,18 @@ fn main() {
         TcpServer::new(IntProto, addr).serve(|| Ok(Doubler));
     });
 
-    let client = thread::spawn(move || {
-        thread::sleep(Duration::new(1, 0));
-        let mut stream = TcpStream::connect(addr).expect("Could not connect to addr");
-        let mut buff = [0; 8];
-        for i in 0..100000 {
-            BigEndian::write_u64(&mut buff, i);
-            let _ = stream.write(&buff).expect(&format!("Failed to write {}", i));
-            let _ = stream.read(&mut buff).expect(&format!("Failed to read {}", i));
-            let result = BigEndian::read_u64(&buff);
-            print!("{} ", result);
-            if i % 30 == 0 {
-                println!();
-            }
-            // assert_eq!(i*2, result)
+    thread::sleep(Duration::new(1, 0));
+    let mut stream = TcpStream::connect(addr).expect("Could not connect to addr");
+    let mut buff = [0; 8];
+    for i in 0..100000 {
+        BigEndian::write_u64(&mut buff, i);
+        let _ = stream.write(&buff).expect(&format!("Failed to write {}", i));
+        let read_in = stream.read(&mut buff).expect(&format!("Failed to read {}", i));
+        if read_in != 8 {
+            println!("Only read {} bytes", read_in);
+            continue
         }
-    });
-    client.join().expect("Couldn't join on client");
+        let result = BigEndian::read_u64(&buff);
+        assert_eq!(i*2, result)
+    }
 }
