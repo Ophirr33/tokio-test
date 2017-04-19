@@ -114,4 +114,5 @@ fn main() {
         let result = BigEndian::read_u64(&buff);
         assert_eq!(i*2, result)
     }
+    println!("Ran successfully!");
 }
