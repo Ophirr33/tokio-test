@@ -6,14 +6,17 @@ extern crate tokio_proto;
 extern crate tokio_service;
 
 use std::str;
-use std::io::{self, Error, ErrorKind};
+use std::io::{self, Error, ErrorKind, Write, Read};
+use std::net::TcpStream;
+use std::thread;
+use std::time::Duration;
 
-use bytes::{BigEndian, Buf, BufMut, BytesMut, IntoBuf};
+use bytes::{BigEndian, Buf, BufMut, ByteOrder, BytesMut, IntoBuf};
 use futures::{future, Future, BoxFuture};
 use tokio_io::codec::{Decoder, Encoder, Framed};
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_proto::TcpServer;
-use tokio_proto::pipeline::ServerProto;
+use tokio_proto::pipeline::{ServerProto};
 use tokio_service::Service;
 
 // First, we implement a *codec*, which provides a way of encoding and
@@ -35,7 +38,8 @@ impl Decoder for IntCodec {
             return Ok(None);
         }
         let eight_bytes = src.split_to(8);
-        Ok(Some(eight_bytes.into_buf().get_u64::<BigEndian>()))
+        let num = eight_bytes.into_buf().get_u64::<BigEndian>();
+        Ok(Some(num))
     }
 }
 
@@ -47,7 +51,7 @@ impl Encoder for IntCodec {
     fn encode(&mut self, item: u64, dst: &mut BytesMut) -> Result<(), Error> {
         let cap = dst.remaining_mut();
         if cap < 8 {
-            // Not enough room to write the u64
+            // Not enough room to write the header + u64
             Err(Error::new(ErrorKind::WriteZero,
                            format!("Not enough room in dst bytes, requires 8 open bytes, found \
                                     {}",
@@ -91,6 +95,26 @@ impl Service for Doubler {
 
 // Finally, we can actually host this service locally!
 fn main() {
-    let addr = "0.0.0.0:12345".parse().unwrap();
-    TcpServer::new(IntProto, addr).serve(|| Ok(Doubler));
+    let addr = "127.0.0.1:12345".parse().unwrap();
+    thread::spawn(move || {
+        TcpServer::new(IntProto, addr).serve(|| Ok(Doubler));
+    });
+
+    let client = thread::spawn(move || {
+        thread::sleep(Duration::new(1, 0));
+        let mut stream = TcpStream::connect(addr).expect("Could not connect to addr");
+        let mut buff = [0; 8];
+        for i in 0..100000 {
+            BigEndian::write_u64(&mut buff, i);
+            let _ = stream.write(&buff).expect(&format!("Failed to write {}", i));
+            let _ = stream.read(&mut buff).expect(&format!("Failed to read {}", i));
+            let result = BigEndian::read_u64(&buff);
+            print!("{} ", result);
+            if i % 30 == 0 {
+                println!();
+            }
+            // assert_eq!(i*2, result)
+        }
+    });
+    client.join().expect("Couldn't join on client");
 }
