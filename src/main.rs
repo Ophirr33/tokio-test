@@ -1,4 +1,5 @@
 extern crate bytes;
+extern crate byteorder;
 extern crate futures;
 extern crate tokio_core;
 extern crate tokio_io;
@@ -6,17 +7,18 @@ extern crate tokio_proto;
 extern crate tokio_service;
 
 use std::str;
-use std::io::{self, Error, ErrorKind, Write, Read};
+use std::io::{self, Error, Write, Read};
 use std::net::TcpStream;
 use std::thread;
 use std::time::Duration;
 
-use bytes::{BigEndian, Buf, BufMut, ByteOrder, BytesMut, IntoBuf};
+use bytes::{BigEndian, Buf, ByteOrder, BytesMut, IntoBuf};
+use byteorder::{WriteBytesExt};
 use futures::{future, Future, BoxFuture};
 use tokio_io::codec::{Decoder, Encoder, Framed};
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_proto::TcpServer;
-use tokio_proto::pipeline::{ServerProto};
+use tokio_proto::pipeline::ServerProto;
 use tokio_service::Service;
 
 // First, we implement a *codec*, which provides a way of encoding and
@@ -49,17 +51,9 @@ impl Encoder for IntCodec {
 
     // Write the u64 into the destination buffer
     fn encode(&mut self, item: u64, dst: &mut BytesMut) -> Result<(), Error> {
-        let cap = dst.remaining_mut();
-        if cap < 8 {
-            // Not enough room to write the header + u64
-            Err(Error::new(ErrorKind::WriteZero,
-                           format!("Not enough room in dst bytes, requires 8 open bytes, found \
-                                    {}",
-                                   cap)))
-        } else {
-            Ok(dst.put_u64::<BigEndian>(item))
-        }
-    }
+        let mut u64v: Vec<u8> = Vec::with_capacity(8);
+        (&mut u64v as &mut Write).write_u64::<byteorder::BigEndian>(item).expect("8/8");
+        Ok(dst.extend(u64v))    }
 }
 
 // Next, we implement the server protocol, which just hooks up the codec above.
@@ -96,23 +90,25 @@ impl Service for Doubler {
 // Finally, we can actually host this service locally!
 fn main() {
     let addr = "127.0.0.1:12345".parse().unwrap();
-    thread::spawn(move || {
-        TcpServer::new(IntProto, addr).serve(|| Ok(Doubler));
-    });
+    thread::spawn(move || { TcpServer::new(IntProto, addr).serve(|| Ok(Doubler)); });
 
     thread::sleep(Duration::new(1, 0));
     let mut stream = TcpStream::connect(addr).expect("Could not connect to addr");
     let mut buff = [0; 8];
     for i in 0..100000 {
         BigEndian::write_u64(&mut buff, i);
-        let _ = stream.write(&buff).expect(&format!("Failed to write {}", i));
-        let read_in = stream.read(&mut buff).expect(&format!("Failed to read {}", i));
+        let _ = stream
+            .write(&buff)
+            .expect(&format!("Failed to write {}", i));
+        let read_in = stream
+            .read(&mut buff)
+            .expect(&format!("Failed to read {}", i));
         if read_in != 8 {
             println!("Only read {} bytes", read_in);
-            continue
+            continue;
         }
         let result = BigEndian::read_u64(&buff);
-        assert_eq!(i*2, result)
+        assert_eq!(i * 2, result)
     }
     println!("Ran successfully!");
 }
